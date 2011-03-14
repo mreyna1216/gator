@@ -1,5 +1,5 @@
 /**
- * Copyright (C) ARM Limited 2010. All rights reserved.
+ * Copyright (C) ARM Limited 2010-2011. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -7,15 +7,8 @@
  *
  */
 
-#include <linux/version.h>
-#include <linux/slab.h>
-#include <linux/fs.h>
-#include <linux/mm.h>
-#include <linux/dcookies.h>
-#include <trace/events/sched.h>
-
 #include "gator.h"
-#include "gator_trace.h"
+#include <trace/events/sched.h>
 
 #define SCHED_SWITCH	0
 #define SCHED_TOTAL		(SCHED_SWITCH+1)

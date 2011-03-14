@@ -1,16 +1,10 @@
 /**
- * Copyright (C) ARM Limited 2010. All rights reserved.
+ * Copyright (C) ARM Limited 2010-2011. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-
-#include <linux/types.h>
-#include <linux/sched.h>
-#include <linux/interrupt.h>
-#include <linux/irq.h>
-#include <linux/fs.h>
 
 #include "gator.h"
 
@@ -119,15 +113,13 @@ static int gator_events_armv6_init(int *key)
 	return 0;
 }
 
-static void __gator_events_armv6_start(void* unused)
+static void gator_events_armv6_online(void)
 {
 	unsigned int cnt;
 	u32 pmnc;
 
 	if (armv6_pmnc_read() & PMCR_E) {
-		pr_err("gator: CPU%u PMNC still enabled when setup new event counter.\n", smp_processor_id());
-		pmnc_count = 0;
-		return;
+		armv6_pmnc_write(armv6_pmnc_read() & ~PMCR_E);
 	}
 
 	/* initialize PMNC, reset overflow, D bit, C bit and P bit. */
@@ -162,40 +154,30 @@ static void __gator_events_armv6_start(void* unused)
 	armv6_pmnc_write(pmnc | PMCR_E);
 }
 
-static int gator_events_armv6_start(void)
-{
-	if (!pmnc_count)
-		return 0;
-	return on_each_cpu(__gator_events_armv6_start, NULL, 1);
-}
-
-static void __gator_events_armv6_stop(void* unused)
+static void gator_events_armv6_offline(void)
 {
 	unsigned int cnt;
 
 	armv6_pmnc_write(armv6_pmnc_read() & ~PMCR_E);
-
 	for (cnt = PMN0; cnt <= CCNT; cnt++) {
 		armv6_pmnc_reset_counter(cnt);
-		pmnc_enabled[cnt] = 0;
-		pmnc_event[cnt] = 0;
 	}
 }
 
 static void gator_events_armv6_stop(void)
 {
-	if (!pmnc_count)
-		return;
-	on_each_cpu(__gator_events_armv6_stop, NULL, 1);
+	unsigned int cnt;
+
+	for (cnt = PMN0; cnt <= CCNT; cnt++) {
+		pmnc_enabled[cnt] = 0;
+		pmnc_event[cnt] = 0;
+	}
 }
 
 static int gator_events_armv6_read(int **buffer)
 {
 	int cnt, len = 0;
 	int cpu = raw_smp_processor_id();
-
-	if (!pmnc_count)
-		return 0;
 
 	for (cnt = PMN0; cnt <= CCNT; cnt++) {
 		if (pmnc_enabled[cnt]) {
@@ -242,8 +224,9 @@ int gator_events_armv6_install(gator_interface *gi) {
 
 	gi->create_files = gator_events_armv6_create_files;
 	gi->init = gator_events_armv6_init;
-	gi->start = gator_events_armv6_start;
 	gi->stop = gator_events_armv6_stop;
+	gi->online = gator_events_armv6_online;
+	gi->offline = gator_events_armv6_offline;
 	gi->read = gator_events_armv6_read;
 #endif
 	return 0;

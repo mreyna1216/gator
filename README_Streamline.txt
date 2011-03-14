@@ -76,42 +76,6 @@ vi rungator.sh
 	/path/to/gatord &
 update-rc.d rungator.sh defaults
 
-*** Driver Sources ***
-
-Gator Sources
-	backtrace.c
-	cpu_buffer.c
-	cpu_fifo.c
-	cpu_fifo.h
-	gator_annotate.c
-	gator_events_irq.c
-	gator_init.c
-	gator_interrupt.c
-	gator_pmnc_armv7.c
-	gator_pmnc_none.c
-	gator_schedtrace.c
-	gator_setup.c
-	gator_timer.c
-	gator_traceprobe.h
-
-Oprofile Sources  // function names updated to avoid Oprofile collisions
-	buffer_sync.c
-	buffer_sync.h
-	cpu_buffer.h
-	event_buffer.c
-	event_buffer.h
-	oprof.h
-	oprofile.h
-	oprofile_files.c
-	oprofile_stats.c
-	oprofile_stats.h
-	timer_int.c
-
-Modified Oprofile Sources
-	buffer_sync.c   // modify sample contract to allow bad 'mm' or cookie
-	oprofilefs.c    // gatorfs and magic number
-	oprof.c         // updated module name and author
-
 *** GPL License ***
 
 For license information, please see the file LICENSE.

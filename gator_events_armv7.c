@@ -1,15 +1,10 @@
 /**
- * Copyright (C) ARM Limited 2010. All rights reserved.
+ * Copyright (C) ARM Limited 2010-2011. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-#include <linux/types.h>
-#include <linux/sched.h>
-#include <linux/interrupt.h>
-#include <linux/irq.h>
-#include <linux/fs.h>
 
 #include "gator.h"
 
@@ -284,14 +279,12 @@ static int gator_events_armv7_init(int *key)
 	return 0;
 }
 
-static void __gator_events_armv7_start(void* unused)
+static void gator_events_armv7_online(void)
 {
 	unsigned int cnt;
 
 	if (armv7_pmnc_read() & PMNC_E) {
-		pr_err("gator: CPU%u PMNC still enabled when setup new event counter\n", raw_smp_processor_id());
-		pmnc_count = 0;
-		return;
+		armv7_pmnc_write(armv7_pmnc_read() & ~PMNC_E);
 	}
 
 	/* Initialize & Reset PMNC: C bit and P bit */
@@ -339,29 +332,19 @@ static void __gator_events_armv7_start(void* unused)
 	armv7_pmnc_write(armv7_pmnc_read() | PMNC_E);
 }
 
-static int gator_events_armv7_start(void)
+static void gator_events_armv7_offline(void)
 {
-	if (!pmnc_count)
-		return 0;
-	return on_each_cpu(__gator_events_armv7_start, NULL, 1);
+	armv7_pmnc_write(armv7_pmnc_read() & ~PMNC_E);
 }
 
-static void __gator_events_armv7_stop(void* unused)
+static void gator_events_armv7_stop(void)
 {
 	unsigned int cnt;
-	armv7_pmnc_write(armv7_pmnc_read() & ~PMNC_E);
 
 	for (cnt = CCNT; cnt < CNTMAX; cnt++) {
 		pmnc_enabled[cnt] = 0;
 		pmnc_event[cnt] = 0;
 	}
-}
-
-static void gator_events_armv7_stop(void)
-{
-	if (!pmnc_count)
-		return;
-	on_each_cpu(__gator_events_armv7_stop, NULL, 1);
 }
 
 static int gator_events_armv7_read(int **buffer)
@@ -419,8 +402,9 @@ int gator_events_armv7_install(gator_interface *gi) {
 
 	gi->create_files = gator_events_armv7_create_files;
 	gi->init = gator_events_armv7_init;
-	gi->start = gator_events_armv7_start;
 	gi->stop = gator_events_armv7_stop;
+	gi->online = gator_events_armv7_online;
+	gi->offline = gator_events_armv7_offline;
 	gi->read = gator_events_armv7_read;
 #endif
 	return 0;

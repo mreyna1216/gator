@@ -1,5 +1,5 @@
 /**
- * Copyright (C) ARM Limited 2010. All rights reserved.
+ * Copyright (C) ARM Limited 2010-2011. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -7,14 +7,8 @@
  *
  */
 
-#include <linux/version.h>
-#include <linux/blkdev.h>
-#include <trace/events/block.h>
-#include <linux/slab.h>
-#include <linux/fs.h>
-
 #include "gator.h"
-#include "gator_trace.h"
+#include <trace/events/block.h>
 
 #define BLOCK_RQ_WR		0
 #define BLOCK_RQ_RD		1
@@ -102,7 +96,7 @@ static int gator_events_block_start(void)
 {
 	int cpu;
 
-	for_each_possible_cpu(cpu) 
+	for_each_present_cpu(cpu) 
 		per_cpu(new_data_avail, cpu) = true;
 
 	// register tracepoints

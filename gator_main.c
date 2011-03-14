@@ -1,5 +1,5 @@
 /**
- * Copyright (C) ARM Limited 2010. All rights reserved.
+ * Copyright (C) ARM Limited 2010-2011. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -7,20 +7,13 @@
  *
  */
 
-static unsigned long gator_protocol_version = 2;
+static unsigned long gator_protocol_version = 3;
 
-#include <linux/version.h>
-#include <linux/init.h>
-#include <linux/module.h>
-#include <linux/types.h>
-#include <linux/fs.h>
-#include <linux/sched.h>
-#include <linux/interrupt.h>
-#include <linux/irq.h>
-#include <linux/smp.h>
+#include "gator.h"
 #include <linux/slab.h>
-#include <linux/mm.h>
-#include <linux/dcookies.h>
+#include <linux/cpu.h>
+#include <linux/sched.h>
+#include <linux/irq.h>
 #include <linux/vmalloc.h>
 #include <asm/uaccess.h>
 
@@ -42,12 +35,11 @@ static unsigned long gator_protocol_version = 2;
 #error kernels prior to 2.6.32 are not supported
 #endif
 
-#include "gator.h"
-
 /******************************************************************************
  * DEFINES
  ******************************************************************************/
-#define BUFFER_SIZE_DEFAULT		131072
+#define BUFFER_SIZE_DEFAULT		262144
+#define SYNC_FREQ_DEFAULT		1000
 
 #define NO_COOKIE				0UL
 #define INVALID_COOKIE			~0UL
@@ -61,6 +53,7 @@ static unsigned long gator_protocol_version = 2;
 #define PROTOCOL_SCHEDULER_TRACE	11
 #define PROTOCOL_COUNTERS			13
 #define PROTOCOL_ANNOTATE			15
+#define PROTOCOL_CPU_SYNC			17
 
 #if defined(__arm__)
 #define PC_REG regs->ARM_pc
@@ -71,19 +64,30 @@ static unsigned long gator_protocol_version = 2;
 /******************************************************************************
  * PER CPU
  ******************************************************************************/
+static unsigned long gator_cpu_cores;
 static unsigned long gator_buffer_size;
 static unsigned long gator_backtrace_depth;
 
 static unsigned long gator_started;
 static unsigned long gator_buffer_opened;
 static unsigned long gator_timer_count;
-static unsigned long gator_dump;
+static unsigned long gator_sync_freq;
+static int gator_master_tick;
 static DEFINE_MUTEX(start_mutex);
 static DEFINE_MUTEX(gator_buffer_mutex);
+
+unsigned long gator_net_traffic;
+
+#define COMMIT_SIZE		128
+#define COMMIT_MASK		(COMMIT_SIZE-1)
+static DEFINE_SPINLOCK(gator_commit_lock);
+static int *gator_commit;
+static int gator_commit_read;
+static int gator_commit_write;
+
 static DECLARE_WAIT_QUEUE_HEAD(gator_buffer_wait);
-/* atomic_t because wait_event checks it outside of gator_buffer_mutex */
-static DEFINE_PER_CPU(atomic_t, gator_buffer_ready);
-static DEFINE_PER_CPU(int, gator_tick);
+static DEFINE_PER_CPU(int, gator_cpu_sync);
+static DEFINE_PER_CPU(int, gator_cpu_tick);
 static DEFINE_PER_CPU(int, gator_first_time);
 
 /******************************************************************************
@@ -115,6 +119,32 @@ u32 gator_cpuid(void)
 	return (val >> 4) & 0xfff;
 }
 #endif
+
+/******************************************************************************
+ * Commit interface
+ ******************************************************************************/
+static int buffer_commit_ready(void)
+{
+	return (gator_commit_read != gator_commit_write);
+}
+
+static void buffer_commit_read(int *cpu, int *readval, int *writeval)
+{
+	int read = gator_commit_read;
+	*cpu      = gator_commit[read+0];
+	*readval  = gator_commit[read+1];
+	*writeval = gator_commit[read+2];
+	gator_commit_read = (read + 4) & COMMIT_MASK;
+}
+
+static void buffer_commit_write(int cpu, int readval, int writeval) {
+	int write = gator_commit_write;
+	gator_commit[write+0] = cpu;
+	gator_commit[write+1] = readval;
+	gator_commit[write+2] = writeval;
+	gator_commit_write = (write + 4) & COMMIT_MASK;
+}
+
 /******************************************************************************
  * Buffer management
  ******************************************************************************/
@@ -123,7 +153,6 @@ static uint32_t use_buffer_mask;
 static DEFINE_PER_CPU(int, use_buffer_seq);
 static DEFINE_PER_CPU(int, use_buffer_read);
 static DEFINE_PER_CPU(int, use_buffer_write);
-static DEFINE_PER_CPU(int, use_buffer_commit);
 static DEFINE_PER_CPU(char *, use_buffer);
 
 static void gator_buffer_write_packed_int(int cpu, unsigned int x)
@@ -193,38 +222,46 @@ static void gator_buffer_header(int cpu)
 	gator_buffer_write_packed_int(cpu, PROTOCOL_FRAME);
 	gator_buffer_write_packed_int(cpu, cpu);
 	gator_buffer_write_packed_int(cpu, per_cpu(use_buffer_seq, cpu));
+	per_cpu(use_buffer_seq, cpu)++;
 }
 
 static void gator_buffer_commit(int cpu)
 {
-	per_cpu(use_buffer_commit, cpu) = per_cpu(use_buffer_write, cpu);
-
-	per_cpu(use_buffer_seq, cpu)++;
+	buffer_commit_write(cpu, per_cpu(use_buffer_read, cpu), per_cpu(use_buffer_write, cpu));
+	per_cpu(use_buffer_read, cpu) = per_cpu(use_buffer_write, cpu);
 	gator_buffer_header(cpu);
-
-	atomic_set(&per_cpu(gator_buffer_ready, cpu), 1);
 	wake_up(&gator_buffer_wait);
 }
 
-static void gator_buffer_check(int cpu)
+static void gator_buffer_check(int cpu, int tick)
 {
-	int commit = 0;
-	int available = per_cpu(use_buffer_write, cpu) - per_cpu(use_buffer_read, cpu);
-	if (available < 0) {
-		available += use_buffer_size;
-	}
-
-	if (!cpu && gator_dump) {
-		gator_dump = 0;
-		commit = 1;
-	} else if (available >= ((use_buffer_size * 3) / 4)) {
-		commit = 1;
-	} else if (cpu && (per_cpu(use_buffer_seq, cpu) < per_cpu(use_buffer_seq, 0))) {
-		commit = 1;
-	}
-
-	if (commit) {
+	if (gator_sync_freq && !(tick % gator_sync_freq)) {
+		int c, sync;
+		spin_lock(&gator_commit_lock);
+		// synchronize, if all online cpus have the same tick waypoint
+		sync = per_cpu(gator_cpu_sync, cpu) = per_cpu(gator_cpu_tick, cpu);
+		for_each_online_cpu(c) {
+			if (sync != per_cpu(gator_cpu_sync, c)) {
+				sync = 0;
+				break;
+			}
+		}
+		if (sync) {
+			gator_buffer_write_packed_int(cpu, PROTOCOL_CPU_SYNC);
+		}
+		// commit the buffer
 		gator_buffer_commit(cpu);
+		spin_unlock(&gator_commit_lock);
+	} else {
+		int available = per_cpu(use_buffer_write, cpu) - per_cpu(use_buffer_read, cpu);
+		if (available < 0) {
+			available += use_buffer_size;
+		}
+		if (available >= ((use_buffer_size * 3) / 4)) {
+			spin_lock(&gator_commit_lock);
+			gator_buffer_commit(cpu);
+			spin_unlock(&gator_commit_lock);
+		}
 	}
 }
 
@@ -305,11 +342,11 @@ static void gator_write_annotate(int cpu, int len, int *buffer)
  ******************************************************************************/
 static gator_interface *gi = NULL;
 
-static void gator_timer_interrupt(unsigned int ticks)
+static void gator_timer_interrupt(void)
 {
 	struct pt_regs * const regs = get_irq_regs();
 	int cpu = raw_smp_processor_id();
-	int *buffer, len;
+	int *buffer, len, tick;
 	gator_interface *i;
 
 	// check full backtrace has enough space, otherwise may
@@ -322,7 +359,6 @@ static void gator_timer_interrupt(unsigned int ticks)
 				i->read(NULL);
 			}
 		}
-		per_cpu(gator_tick, cpu) += ticks;
 		return;
 	}
 
@@ -354,52 +390,95 @@ static void gator_timer_interrupt(unsigned int ticks)
 	gator_add_sample(cpu, regs);
 
 	// Timer Tick
-	gator_write_packet(cpu, PROTOCOL_END_TICK, 1, &per_cpu(gator_tick, cpu));
-	per_cpu(gator_tick, cpu) += ticks;
+	tick = per_cpu(gator_cpu_tick, cpu);
+	if (tick == gator_master_tick) {
+		tick++;
+		per_cpu(gator_cpu_tick, cpu) = gator_master_tick = tick;
+	} else {
+		per_cpu(gator_cpu_tick, cpu) = tick = gator_master_tick;
+	}
+	gator_write_packet(cpu, PROTOCOL_END_TICK, 1, &tick);
 
-	// Check and commit
-	gator_buffer_check(cpu);
+	// Check and commit; generally, commit is set to occur once per second
+	gator_buffer_check(cpu, tick);
 }
 
 /******************************************************************************
  * hrtimer
  ******************************************************************************/
 DEFINE_PER_CPU(struct hrtimer, percpu_hrtimer);
-extern void gator_timer_stop(void);
+DEFINE_PER_CPU(int, hrtimer_is_active);
 static int hrtimer_running;
 static ktime_t profiling_interval;
-static atomic_t num_active_timers;
 
 static enum hrtimer_restart gator_hrtimer_notify(struct hrtimer *hrtimer)
 {
-	unsigned int ticks = (unsigned int)hrtimer_forward_now(hrtimer, profiling_interval);
-	gator_timer_interrupt(ticks);
+	hrtimer_forward_now(hrtimer, profiling_interval);
+	gator_timer_interrupt();
 	return HRTIMER_RESTART;
 }
 
-int gator_timer_init(void)
+static int gator_timer_init(void)
 {
 	return 0;
 }
 
-static void __gator_timer_start(void *unused)
+static void __gator_timer_offline(void *unused)
 {
 	int cpu = smp_processor_id();
+	if (per_cpu(hrtimer_is_active, cpu)) {
+		gator_interface *i;
+		struct hrtimer *hrtimer = &per_cpu(percpu_hrtimer, cpu);
+		hrtimer_cancel(hrtimer);
+		per_cpu(hrtimer_is_active, cpu) = 0;
+		gator_buffer_commit(cpu);
 
-	struct hrtimer *hrtimer = &per_cpu(percpu_hrtimer, cpu);
-	hrtimer_init(hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	hrtimer->function = gator_hrtimer_notify;
-	hrtimer_start(hrtimer, profiling_interval, HRTIMER_MODE_REL_PINNED);
-	atomic_inc(&num_active_timers);
-
-	per_cpu(gator_first_time, cpu) = 1;
-	per_cpu(gator_tick, cpu) = 0;
+		// offline any events
+		for (i = gi; i != NULL; i = i->next) {
+			if (i->offline) {
+				i->offline();
+			}
+		}
+	}
 }
 
-int gator_timer_start(unsigned long setup)
+static void gator_timer_offline(void)
 {
-	atomic_set(&num_active_timers, 0);
+	if (hrtimer_running) {
+		hrtimer_running = 0;
 
+		on_each_cpu(__gator_timer_offline, NULL, 1);
+
+		// output a final sync point
+		gator_buffer_write_packed_int(0, PROTOCOL_CPU_SYNC);
+		gator_buffer_commit(0);
+	}
+}
+
+static void __gator_timer_online(void *unused)
+{
+	int cpu = smp_processor_id();
+	if (!per_cpu(hrtimer_is_active, cpu)) {
+		gator_interface *i;
+		struct hrtimer *hrtimer = &per_cpu(percpu_hrtimer, cpu);
+		hrtimer_init(hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+		hrtimer->function = gator_hrtimer_notify;
+		hrtimer_start(hrtimer, profiling_interval, HRTIMER_MODE_REL_PINNED);
+		per_cpu(gator_cpu_tick, cpu) = 0;
+		per_cpu(gator_first_time, cpu) = 1;
+		per_cpu(hrtimer_is_active, cpu) = 1;
+
+		// online any events
+		for (i = gi; i != NULL; i = i->next) {
+			if (i->online) {
+				i->online();
+			}
+		}
+	}
+}
+
+int gator_timer_online(unsigned long setup)
+{
 	if (!setup) {
 		pr_err("gator: cannot start due to a system tick value of zero");
 		return -1;
@@ -414,35 +493,10 @@ int gator_timer_start(unsigned long setup)
 	profiling_interval = ns_to_ktime(1000000000UL / setup);
 
 	// timer interrupt
-	on_each_cpu(__gator_timer_start, NULL, 1);
-
-	if (atomic_read(&num_active_timers) != num_present_cpus()) {
-		pr_err("gator: %d timer(s) started yet %d cpu(s) detected, please bring all cpus online manually and restart\n", atomic_read(&num_active_timers), nr_cpu_ids);
-		gator_timer_stop();
-		return -1;
-	}
+	gator_master_tick = 0;
+	on_each_cpu(__gator_timer_online, NULL, 1);
 
 	return 0;
-}
-
-void __gator_timer_stop(void *unused)
-{
-	struct hrtimer *hrtimer = &per_cpu(percpu_hrtimer, smp_processor_id());
-	hrtimer_cancel(hrtimer);
-	atomic_dec(&num_active_timers);
-}
-
-void gator_timer_stop(void)
-{
-	if (hrtimer_running) {
-		int previously_running = atomic_read(&num_active_timers);
-		hrtimer_running = 0;
-		on_each_cpu(__gator_timer_stop, NULL, 1);
-		if (atomic_read(&num_active_timers) != 0) {
-			pr_err("gator: %d timers stopped yet %d were running, it is advised to quit and restart gatord", previously_running - atomic_read(&num_active_timers), previously_running);
-			atomic_set(&num_active_timers, 0);
-		}
-	}
 }
 
 static uint64_t gator_get_time(void)
@@ -454,6 +508,42 @@ static uint64_t gator_get_time(void)
 	timestamp = timespec_to_ns(&ts);
 
 	return timestamp;
+}
+
+/******************************************************************************
+ * cpu online notifier
+ ******************************************************************************/
+static int __cpuinit gator_cpu_notify(struct notifier_block *self,
+											unsigned long action, void *hcpu)
+{
+	long cpu = (long)hcpu;
+
+	switch (action) {
+		case CPU_ONLINE:
+		case CPU_ONLINE_FROZEN:
+			smp_call_function_single(cpu, __gator_timer_online, NULL, 1);
+			break;
+		case CPU_DOWN_PREPARE:
+		case CPU_DOWN_PREPARE_FROZEN:
+			smp_call_function_single(cpu, __gator_timer_offline, NULL, 1);
+			break;
+	}
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block __refdata gator_cpu_notifier = {
+	.notifier_call = gator_cpu_notify,
+};
+
+static int gator_notifier_start(void)
+{
+	return register_hotcpu_notifier(&gator_cpu_notifier);
+}
+
+static void gator_notifier_stop(void)
+{
+	unregister_hotcpu_notifier(&gator_cpu_notifier);
 }
 
 /******************************************************************************
@@ -470,6 +560,8 @@ int gator_event_install(int (*event_install)(gator_interface *))
 	ni->init = NULL;
 	ni->start = NULL;
 	ni->stop = NULL;
+	ni->online = NULL;
+	ni->offline = NULL;
 	ni->read = NULL;
 	ni->next = NULL;
 
@@ -538,11 +630,15 @@ static int gator_start(void)
 		goto annotate_failure;
 	if (gator_trace_sched_start())
 		goto sched_failure;
-	if (gator_timer_start(gator_timer_count))
+	if (gator_timer_online(gator_timer_count))
 		goto timer_failure;
+	if (gator_notifier_start())
+		goto notifier_failure;
 
 	return 0;
 
+notifier_failure:
+	gator_timer_offline();
 timer_failure:
 	gator_trace_sched_stop();
 sched_failure:
@@ -560,17 +656,19 @@ static void gator_stop(void)
 {
 	gator_interface *i;
 
-	// stop all interrupt callback reads before tearing down other interfaces
-	gator_timer_stop();
-	gator_annotate_stop();
-	gator_trace_sched_stop();
-
 	// stop all events
 	for (i = gi; i != NULL; i = i->next) {
 		if (i->stop) {
 			i->stop();
 		}
 	}
+
+	gator_annotate_stop();
+	gator_trace_sched_stop();
+
+	// stop all interrupt callback reads before tearing down other interfaces
+	gator_timer_offline();
+	gator_notifier_stop();
 }
 
 static void gator_exit(void)
@@ -604,18 +702,28 @@ static int gator_op_setup(void)
 		goto setup_error;
 	}
 
-	for_each_possible_cpu(cpu) {
+	gator_net_traffic = 0;
+
+	gator_commit_read = gator_commit_write = 0;
+	gator_commit = vmalloc(COMMIT_SIZE * sizeof(int));
+	if (!gator_commit) {
+		err = -ENOMEM;
+		goto setup_error;
+	}
+
+	for_each_present_cpu(cpu) {
 		per_cpu(use_buffer, cpu) = vmalloc(use_buffer_size);
 		if (!per_cpu(use_buffer, cpu)) {
 			err = -ENOMEM;
 			goto setup_error;
 		}
 
-		atomic_set(&per_cpu(gator_buffer_ready, cpu), 0);
+		per_cpu(gator_cpu_sync, cpu) = 0;
+		per_cpu(gator_cpu_tick, cpu) = 0;
+
 		per_cpu(use_buffer_seq, cpu) = 0;
 		per_cpu(use_buffer_read, cpu) = 0;
 		per_cpu(use_buffer_write, cpu) = 0;
-		per_cpu(use_buffer_commit, cpu) = 0;
 		gator_buffer_header(cpu);
 	}
 
@@ -646,8 +754,6 @@ static int gator_op_start(void)
 /* echo 0>/dev/gator/enable */
 static void gator_op_stop(void)
 {
-	int cpu;
-
 	mutex_lock(&start_mutex);
 
 	if (gator_started) {
@@ -655,11 +761,6 @@ static void gator_op_stop(void)
 
 		mutex_lock(&gator_buffer_mutex);
 
-		/* wake up the daemon to read what remains */
-		for_each_possible_cpu(cpu) {
-			gator_buffer_commit(cpu);
-			atomic_set(&per_cpu(gator_buffer_ready, cpu), 1);
-		}
 		gator_started = 0;
 		cookies_release();
 		wake_up(&gator_buffer_wait);
@@ -676,14 +777,16 @@ static void gator_shutdown(void)
 
 	mutex_lock(&start_mutex);
 
-	for_each_possible_cpu(cpu) {
+	vfree(gator_commit);
+	gator_commit = NULL;
+
+	for_each_present_cpu(cpu) {
 		mutex_lock(&gator_buffer_mutex);
 		vfree(per_cpu(use_buffer, cpu));
 		per_cpu(use_buffer, cpu) = NULL;
 		per_cpu(use_buffer_seq, cpu) = 0;
 		per_cpu(use_buffer_read, cpu) = 0;
 		per_cpu(use_buffer_write, cpu) = 0;
-		per_cpu(use_buffer_commit, cpu) = 0;
 		mutex_unlock(&gator_buffer_mutex);
 	}
 
@@ -748,15 +851,6 @@ static int event_buffer_open(struct inode *inode, struct file *file)
 	if (test_and_set_bit_lock(0, &gator_buffer_opened))
 		return -EBUSY;
 
-	/* Register as a user of dcookies
-	 * to ensure they persist for the lifetime of
-	 * the open event file
-	 */
-	err = -EINVAL;
-	file->private_data = dcookie_register();
-	if (!file->private_data)
-		goto out;
-
 	if ((err = gator_op_setup()))
 		goto fail;
 
@@ -767,33 +861,16 @@ static int event_buffer_open(struct inode *inode, struct file *file)
 	return 0;
 
 fail:
-	dcookie_unregister(file->private_data);
-out:
 	__clear_bit_unlock(0, &gator_buffer_opened);
 	return err;
 }
 
 static int event_buffer_release(struct inode *inode, struct file *file)
 {
-	int cpu;
 	gator_op_stop();
 	gator_shutdown();
-	dcookie_unregister(file->private_data);
-	for_each_possible_cpu(cpu) {
-		atomic_set(&per_cpu(gator_buffer_ready, cpu), 0);
-	}
 	__clear_bit_unlock(0, &gator_buffer_opened);
 	return 0;
-}
-
-static int event_buffer_ready(void)
-{
-	int cpu;
-	for_each_possible_cpu(cpu) {
-		if (atomic_read(&per_cpu(gator_buffer_ready, cpu)))
-			return cpu;
-	}
-	return -1;
 }
 
 static ssize_t event_buffer_read(struct file *file, char __user *buf,
@@ -808,18 +885,17 @@ static ssize_t event_buffer_read(struct file *file, char __user *buf,
 	if (count != use_buffer_size || *offset)
 		return -EINVAL;
 
-	wait_event_interruptible(gator_buffer_wait, event_buffer_ready() >= 0 || !gator_started);
-	cpu = event_buffer_ready();
+	// sleep until the condition is true or a signal is received
+	// the condition is checked each time gator_buffer_wait is woken up
+	wait_event_interruptible(gator_buffer_wait, buffer_commit_ready() || !gator_started);
 
 	if (signal_pending(current))
 		return -EINTR;
 
-	if (cpu < 0)
+	if (!buffer_commit_ready())
 		return 0;
 
-	/* should not happen */
-	if (!atomic_read(&per_cpu(gator_buffer_ready, cpu)))
-		return -EAGAIN;
+	buffer_commit_read(&cpu, &read, &commit);
 
 	mutex_lock(&gator_buffer_mutex);
 
@@ -832,8 +908,6 @@ static ssize_t event_buffer_read(struct file *file, char __user *buf,
 	}
 
 	/* determine the size of two halves */
-	commit = per_cpu(use_buffer_commit, cpu);
-	read = per_cpu(use_buffer_read, cpu);
 	length1 = commit - read;
 	length2 = 0;
 	buffer1 = &(per_cpu(use_buffer, cpu)[read]);
@@ -857,16 +931,15 @@ static ssize_t event_buffer_read(struct file *file, char __user *buf,
 		}
 	}
 
-	/* update position */
 	retval = length1 + length2;
-	per_cpu(use_buffer_read, cpu) = (read + retval) & use_buffer_mask;
-
-	atomic_set(&per_cpu(gator_buffer_ready, cpu), 0);
 
 	/* kick just in case we've lost an SMP event */
 	wake_up(&gator_buffer_wait);
 
 out:
+	// do not adjust network stats if in non-streaming buffer mode
+	if (gator_sync_freq)
+		gator_net_traffic += retval;
 	mutex_unlock(&gator_buffer_mutex);
 	return retval;
 }
@@ -922,17 +995,24 @@ void gator_op_create_files(struct super_block *sb, struct dentry *root)
 {
 	struct dentry *dir;
 	gator_interface *i;
+	int cpu;
 
 	/* reinitialize default values */
+	gator_cpu_cores = 0;
+	for_each_present_cpu(cpu) {
+		gator_cpu_cores++;
+	}
 	gator_buffer_size =	BUFFER_SIZE_DEFAULT;
+	gator_sync_freq = SYNC_FREQ_DEFAULT;
 
 	gatorfs_create_file(sb, root, "enable", &enable_fops);
 	gatorfs_create_file(sb, root, "buffer", &gator_event_buffer_fops);
 	gatorfs_create_file(sb, root, "backtrace_depth", &depth_fops);
 	gatorfs_create_file(sb, root, "cpu_type", &cpu_type_fops);
+	gatorfs_create_ulong(sb, root, "cpu_cores", &gator_cpu_cores);
 	gatorfs_create_ulong(sb, root, "buffer_size", &gator_buffer_size);
 	gatorfs_create_ulong(sb, root, "tick", &gator_timer_count);
-	gatorfs_create_ulong(sb, root, "dump", &gator_dump);
+	gatorfs_create_ulong(sb, root, "sync_freq", &gator_sync_freq);
 	gatorfs_create_ro_ulong(sb, root, "version", &gator_protocol_version);
 
 	// Annotate interface
@@ -975,6 +1055,7 @@ static void __exit gator_module_exit(void)
 #ifdef GATOR_DEBUG
 	pr_err("gator_module_exit");
 #endif
+	tracepoint_synchronize_unregister();
 	gatorfs_unregister();
 	if (gator_initialized) {
 		gator_initialized = 0;

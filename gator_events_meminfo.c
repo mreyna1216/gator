@@ -1,5 +1,5 @@
 /**
- * Copyright (C) ARM Limited 2010. All rights reserved.
+ * Copyright (C) ARM Limited 2010-2011. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -7,15 +7,9 @@
  *
  */
 
-#include <linux/workqueue.h>
-#include <linux/version.h>
-#include <linux/slab.h>
-#include <linux/mm.h>
-#include <linux/fs.h>
-#include <trace/events/kmem.h>
-
 #include "gator.h"
-#include "gator_trace.h"
+#include <linux/workqueue.h>
+#include <trace/events/kmem.h>
 
 #define MEMINFO_MEMFREE		0
 #define MEMINFO_MEMUSED		1

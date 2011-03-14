@@ -1,5 +1,5 @@
 /**
- * Copyright (C) ARM Limited 2010. All rights reserved.
+ * Copyright (C) ARM Limited 2010-2011. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -11,8 +11,6 @@
 #define MAX_COLLISIONS		2
 
 static DEFINE_PER_CPU(uint32_t, cookie_next_key);
-static DEFINE_PER_CPU(uint32_t, cookie_prev_text);
-static DEFINE_PER_CPU(uint32_t, cookie_prev_value);
 static DEFINE_PER_CPU(uint64_t *, cookie_keys);
 static DEFINE_PER_CPU(uint32_t *, cookie_values);
 
@@ -105,10 +103,6 @@ static inline uint32_t get_cookie(int cpu, int tgid, struct vm_area_struct *vma)
 	}
 
 	text = (char*)path->dentry->d_name.name;
-	if (per_cpu	(cookie_prev_text, cpu) == (uint32_t)text) {
-		return per_cpu(cookie_prev_value, cpu);
-	}
-
 	key = gator_chksum_crc32(text);
 	key = (key << 32) | (uint32_t)text;
 
@@ -125,8 +119,6 @@ static inline uint32_t get_cookie(int cpu, int tgid, struct vm_area_struct *vma)
 	gator_buffer_write_string(cpu, text);
 
 output:
-	per_cpu(cookie_prev_text, cpu) = (uint32_t)text;
-	per_cpu(cookie_prev_value, cpu) = cookie;
 	return cookie;
 }
 
@@ -187,10 +179,8 @@ static void cookies_initialize(void)
 	int cpu, size;
 	int i, j;
 
-	for_each_possible_cpu(cpu) {
+	for_each_present_cpu(cpu) {
 		per_cpu(cookie_next_key, cpu) = nr_cpu_ids + cpu;
-		per_cpu(cookie_prev_text, cpu) = 0;
-		per_cpu(cookie_prev_value, cpu) = 0;
 
 		size = COOKIEMAP_ENTRIES * MAX_COLLISIONS * sizeof(uint64_t);
 		per_cpu(cookie_keys, cpu) = (uint64_t*)kmalloc(size, GFP_KERNEL);
@@ -221,7 +211,7 @@ static void cookies_release(void)
 {
 	int cpu;
 
-	for_each_possible_cpu(cpu) {
+	for_each_present_cpu(cpu) {
 		kfree(per_cpu(cookie_keys, cpu));
 		per_cpu(cookie_keys, cpu) = NULL;
 

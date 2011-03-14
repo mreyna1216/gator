@@ -1,5 +1,5 @@
 /**
- * Copyright (C) ARM Limited 2010. All rights reserved.
+ * Copyright (C) ARM Limited 2010-2011. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -7,14 +7,8 @@
  *
  */
 
-#include <linux/slab.h>
-#include <linux/fs.h>
-#include <linux/mm.h>
-#include <linux/version.h>
-#include <linux/hardirq.h>
 #include <trace/events/sched.h>
-
-#include "gator_trace.h"
+#include "gator.h"
 
 #define SCHED_TIMER_EVENT		0
 #define SCHED_WAIT_TASK			1
@@ -147,7 +141,7 @@ int gator_trace_sched_start(void)
 {
 	int cpu;
 
-	for_each_possible_cpu(cpu) {
+	for_each_present_cpu(cpu) {
 		per_cpu(theSchedSel, cpu) = 0;
 		per_cpu(theSchedPos, cpu) = 0;
 		per_cpu(theSchedErr, cpu) = 0;
@@ -217,7 +211,7 @@ void gator_trace_sched_stop(void)
 	GATOR_UNREGISTER_TRACE(sched_process_fork);
 	pr_debug("gator: unregistered tracepoints\n");
 
-	for_each_possible_cpu(cpu) {
+	for_each_present_cpu(cpu) {
 		kfree(per_cpu(theSchedBuf, cpu)[0]);
 		kfree(per_cpu(theSchedBuf, cpu)[1]);
 		per_cpu(theSchedBuf, cpu)[0] = NULL;

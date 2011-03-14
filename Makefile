@@ -7,6 +7,7 @@ gator-objs :=	gator_main.o \
 		gator_events_armv7.o \
 		gator_events_irq.o \
 		gator_events_sched.o \
+		gator_events_net.o \
 		gator_events_block.o \
 		gator_events_meminfo.o
 
@@ -20,6 +21,6 @@ all:
 	$(error)
 
 clean:
-	rm -f *.o .*.cmd */*.o */.*.cmd modules.order Module.symvers gator.ko gator.mod.c
+	rm -f *.o modules.order Module.symvers gator.ko gator.mod.c
 
 endif

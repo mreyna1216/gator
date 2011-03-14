@@ -1,5 +1,5 @@
 /**
- * Copyright (C) ARM Limited 2010. All rights reserved.
+ * Copyright (C) ARM Limited 2010-2011. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -7,15 +7,8 @@
  *
  */
 
-#include <linux/slab.h>
-#include <linux/fs.h>
-#include <linux/mm.h>
-#include <linux/dcookies.h>
-#include <linux/version.h>
-#include <trace/events/irq.h>
-
 #include "gator.h"
-#include "gator_trace.h"
+#include <trace/events/irq.h>
 
 #define HARDIRQ		0
 #define SOFTIRQ		1
@@ -41,8 +34,11 @@ GATOR_DEFINE_PROBE(irq_handler_exit, TP_PROTO(int irq,
 	local_irq_restore(flags);
 }
 
-GATOR_DEFINE_PROBE(softirq_exit, TP_PROTO(struct softirq_action *h,
-		struct softirq_action *vec))
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 37)
+GATOR_DEFINE_PROBE(softirq_exit, TP_PROTO(struct softirq_action *h, struct softirq_action *vec))
+#else
+GATOR_DEFINE_PROBE(softirq_exit, TP_PROTO(unsigned int vec_nr))
+#endif
 {
 	unsigned long flags;
 
@@ -93,7 +89,7 @@ static int gator_events_irq_start(void)
 {
 	int cpu, i;
 
-	for_each_possible_cpu(cpu) {
+	for_each_present_cpu(cpu) {
 		for (i = 0; i < TOTALIRQ; i++)
 			per_cpu(irqPrev, cpu)[i] = 0;
 	}
