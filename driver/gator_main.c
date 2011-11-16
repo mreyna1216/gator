@@ -70,7 +70,11 @@ static unsigned long gator_protocol_version = 7;
 #define MESSAGE_SCHEDULER_TRACE		9
 #define MESSAGE_PID_NAME			11
 
+#if 0 /* Disabled because of changes in Linaro 3.1 kernel */
 #define LINUX_PMU_SUPPORT LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 35) && defined(CONFIG_CPU_HAS_PMU)
+#else
+#define LINUX_PMU_SUPPORT 0
+#endif
 
 #if defined(__arm__)
 #define PC_REG regs->ARM_pc
