@@ -18,6 +18,7 @@ static unsigned long gator_protocol_version = 7;
 #include <linux/highmem.h>
 #include <linux/pagemap.h>
 #include <linux/suspend.h>
+#include <linux/module.h>
 #include <asm/stacktrace.h>
 #include <asm/uaccess.h>
 
