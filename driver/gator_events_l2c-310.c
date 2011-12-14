@@ -148,10 +148,7 @@ int gator_events_l2c310_init(void)
 	if (gator_cpuid() != CORTEX_A5 && gator_cpuid() != CORTEX_A9)
 		return -1;
 
-#if defined(CONFIG_ARCH_EXYNOS4)
-	gator_events_l2c310_probe(0xfe600000);
-#endif
-#if defined(CONFIG_ARCH_S5PV310)
+#if defined(CONFIG_ARCH_EXYNOS4) || defined(CONFIG_ARCH_S5PV310)
 	gator_events_l2c310_probe(0x10502000);
 #endif
 #if defined(CONFIG_ARCH_OMAP4)
