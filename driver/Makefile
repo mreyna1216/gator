@@ -11,20 +11,9 @@ gator-y :=	gator_main.o \
 		gator_events_net.o \
 		gator_events_block.o \
 		gator_events_meminfo.o \
-		gator_events_power.o \
 		gator_events_perf_pmu.o
 
 gator-y +=	gator_events_mmaped.o
-
-ifeq ($(GATOR_WITH_MALI_SUPPORT),)
-ifeq ($(GATOR_MALI_INCLUDE),)
-GATOR_MALI_INCLUDE = $(abspath $(shell find -L . -name "mali_linux_trace.h" | sed -n -e '1s,\(.*\)/linux/mali_linux_trace.h$$,\1,p'))
-endif
-ifneq ($(GATOR_MALI_INCLUDE),)
-GATOR_WITH_MALI_SUPPORT = MALI_400  # for now, assume all devices with Mali have the Mali-400
-EXTRA_CFLAGS +=	-I$(GATOR_MALI_INCLUDE)
-endif
-endif
 
 ifneq ($(GATOR_WITH_MALI_SUPPORT),)
 ifeq ($(GATOR_WITH_MALI_SUPPORT),MALI_T6xx)
