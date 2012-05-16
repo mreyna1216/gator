@@ -10,6 +10,7 @@
 #include "gator.h"
 #include <linux/workqueue.h>
 #include <trace/events/kmem.h>
+#include <linux/hardirq.h>
 
 #define MEMINFO_MEMFREE		0
 #define MEMINFO_MEMUSED		1
@@ -145,7 +146,7 @@ static void gator_events_meminfo_stop(void)
 	}
 }
 
-// Must be run in a work queue as the kernel function si_meminfo() can sleep
+// Must be run in process context (work queue) as the kernel function si_meminfo() can sleep
 static void wq_sched_handler(struct work_struct *wsptr)
 {
 	struct sysinfo info;
@@ -189,7 +190,11 @@ static int gator_events_meminfo_read(long long **buffer)
 
 	if (last_mem_event != mem_event) {
 		last_mem_event = mem_event;
-		schedule_work(&work);
+		if (in_interrupt()) {
+			schedule_work(&work);
+		} else {
+			wq_sched_handler(NULL);
+		}
 	}
 
 	if (!new_data_avail)

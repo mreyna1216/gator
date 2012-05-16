@@ -7,6 +7,7 @@
 ARCH=arm
 
 CPP=$(CROSS_COMPILE)g++
+GCC=$(CROSS_COMPILE)gcc
 
 # -g produces debugging information
 # -O3 maximum optimization
@@ -17,12 +18,17 @@ CPP=$(CROSS_COMPILE)g++
 # -std=c++98 is the 1998 c++ standard
 # -march=armv5t is required to set the minimum architecture
 # -mthumb-interwork is required for interworking to ARM or Thumb stdlibc
-CFLAGS=-O3 -Wall -Werror -march=armv5t -mthumb-interwork
+CFLAGS=-O3 -Wall -Werror -Wno-error=sequence-point -march=armv5t -mthumb-interwork
 TARGET=gatord
-CPP_SRC = $(wildcard *.cpp)
-TGT_OBJS = $(CPP_SRC:%.cpp=%.o)
+C_SRC = $(wildcard mxml/*.c)
+CPP_SRC  = $(wildcard *.cpp)
+TGT_OBJS = $(CPP_SRC:%.cpp=%.o) \
+           $(C_SRC:%.c=%.o)
 
 all: $(TARGET)
+
+%.o: %.c *.h
+	$(GCC) -c $(CFLAGS) -o $@ $<
 
 %.o: %.cpp *.h
 	$(CPP) -c $(CFLAGS) -o $@ $<
@@ -37,4 +43,4 @@ convert:
 	xxd -i configuration.xml > configuration_xml.h
 
 clean:
-	rm -f *.o $(TARGET) events.xml events_xml.h configuration_xml.h
+	rm -f *.o mxml/*.o $(TARGET) events.xml events_xml.h configuration_xml.h
