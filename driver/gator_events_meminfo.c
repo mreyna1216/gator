@@ -26,7 +26,6 @@ static unsigned int mem_event = 0;
 static bool new_data_avail;
 
 static void wq_sched_handler(struct work_struct *wsptr);
-
 DECLARE_WORK(work, wq_sched_handler);
 static struct timer_list meminfo_wake_up_timer;
 static void meminfo_wake_up_handler(unsigned long unused_data);
@@ -141,9 +140,9 @@ static void gator_events_meminfo_stop(void)
 		GATOR_UNREGISTER_TRACE(mm_page_free_batched);
 #endif
 		GATOR_UNREGISTER_TRACE(mm_page_alloc);
-	}
 
-	del_timer_sync(&meminfo_wake_up_timer);
+		del_timer_sync(&meminfo_wake_up_timer);
+	}
 
 	meminfo_global_enabled = 0;
 	for (i = 0; i < MEMINFO_TOTAL; i++) {

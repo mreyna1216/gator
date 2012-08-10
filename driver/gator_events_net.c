@@ -25,6 +25,7 @@ static int netGet[TOTALNET * 4];
 
 static struct timer_list net_wake_up_timer;
 
+// Must be run in process context as the kernel function dev_get_stats() can sleep
 static void get_network_stats(struct work_struct *wsptr) {
 	int rx = 0, tx = 0;
 	struct net_device *dev;

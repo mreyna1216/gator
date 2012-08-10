@@ -27,8 +27,6 @@ static void wq_cookie_handler(struct work_struct *unused);
 DECLARE_WORK(cookie_work, wq_cookie_handler);
 static struct timer_list app_process_wake_up_timer;
 static void app_process_wake_up_handler(unsigned long unused_data);
-static struct timer_list app_process_wake_up_timer;
-static void app_process_wake_up_handler(unsigned long unused_data);
 
 static uint32_t cookiemap_code(uint64_t value64) {
 	uint32_t value = (uint32_t)((value64 >> 32) + value64);
@@ -172,6 +170,7 @@ static int translate_app_process(char** text, int cpu, struct task_struct * task
 
 		translate_buffer_write_int(cpu, (unsigned int)task);
 		translate_buffer_write_int(cpu, (unsigned int)vma);
+
 		mod_timer(&app_process_wake_up_timer, jiffies + 1);
 		goto out;
 	}
@@ -382,7 +381,7 @@ static int cookies_initialize(void)
 		gator_crc32_table[i] = crc;
 	}
 
-        setup_timer(&app_process_wake_up_timer, app_process_wake_up_handler, 0);
+	setup_timer(&app_process_wake_up_timer, app_process_wake_up_handler, 0);
 
 cookie_setup_error:
 	return err;
