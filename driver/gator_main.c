@@ -7,7 +7,7 @@
  *
  */
 
-static unsigned long gator_protocol_version = 9;
+static unsigned long gator_protocol_version = 10;
 
 #include <linux/slab.h>
 #include <linux/cpu.h>
@@ -108,6 +108,9 @@ static DEFINE_MUTEX(start_mutex);
 static DEFINE_MUTEX(gator_buffer_mutex);
 
 bool event_based_sampling;
+#if defined(__arm__) && (GATOR_PERF_PMU_SUPPORT)
+DEFINE_PER_CPU(struct perf_event *, pevent_ebs);
+#endif
 
 static DECLARE_WAIT_QUEUE_HEAD(gator_buffer_wait);
 static struct timer_list gator_buffer_wake_up_timer;
@@ -690,11 +693,6 @@ static void gator_stop(void)
 {
 	struct gator_interface *gi;
 
-	// stop all events
-	list_for_each_entry(gi, &gator_events, list)
-		if (gi->stop)
-			gi->stop();
-
 	gator_annotate_stop();
 	gator_trace_sched_stop();
 	gator_trace_power_stop();
@@ -704,6 +702,11 @@ static void gator_stop(void)
 	// stop all interrupt callback reads before tearing down other interfaces
 	gator_notifier_stop(); // should be called before gator_timer_stop to avoid re-enabling the hrtimer after it has been offlined
 	gator_timer_stop();
+
+	// stop all events
+	list_for_each_entry(gi, &gator_events, list)
+		if (gi->stop)
+			gi->stop();
 }
 
 /******************************************************************************
