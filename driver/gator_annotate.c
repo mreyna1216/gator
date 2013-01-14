@@ -44,8 +44,9 @@ static ssize_t annotate_write(struct file *file, char const __user *buf, size_t 
 		return -EINVAL;
 	}
 
-	// Annotation is not supported in interrupt context
+	// Annotations are not supported in interrupt context
 	if (in_interrupt()) {
+		printk(KERN_WARNING "gator: Annotations are not supported in interrupt context\n");
 		return -EINVAL;
 	}
 
@@ -58,7 +59,8 @@ static ssize_t annotate_write(struct file *file, char const __user *buf, size_t 
 		goto annotate_write_out;
 	}
 
-	cpu = 0; // Annotation only uses a single per-cpu buffer as the data must be in order to the engine
+	// Annotation only uses a single per-cpu buffer as the data must be in order to the engine
+	cpu = 0;
 
 	if (current == NULL) {
 		pid = 0;
@@ -129,9 +131,12 @@ static int annotate_release(struct inode *inode, struct file *file)
 		uint32_t pid = current->pid;
 		gator_buffer_write_packed_int(cpu, ANNOTATE_BUF, smp_processor_id());
 		gator_buffer_write_packed_int(cpu, ANNOTATE_BUF, pid);
-		gator_buffer_write_packed_int64(cpu, ANNOTATE_BUF, 0); // time
-		gator_buffer_write_packed_int(cpu, ANNOTATE_BUF, 0);   // size
+		gator_buffer_write_packed_int64(cpu, ANNOTATE_BUF, 0);	// time
+		gator_buffer_write_packed_int(cpu, ANNOTATE_BUF, 0);	// size
 	}
+
+	// Check and commit; commit is set to occur once buffer is 3/4 full
+	buffer_check(cpu, ANNOTATE_BUF);
 
 	spin_unlock(&annotate_lock);
 
@@ -139,8 +144,8 @@ static int annotate_release(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations annotate_fops = {
-	.write		= annotate_write,
-	.release	= annotate_release
+	.write = annotate_write,
+	.release = annotate_release
 };
 
 static int gator_annotate_create_files(struct super_block *sb, struct dentry *root)
