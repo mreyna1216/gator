@@ -44,8 +44,10 @@ static unsigned long gator_protocol_version = 16;
 #error gator requires the kernel to have CONFIG_HIGH_RES_TIMERS defined to support PC sampling
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 12, 0) /* Because CONFIG_LOCAL_TIMERS was removed in 3.12 */
 #if defined(__arm__) && defined(CONFIG_SMP) && !defined(CONFIG_LOCAL_TIMERS)
 #error gator requires the kernel to have CONFIG_LOCAL_TIMERS defined on SMP systems
+#endif
 #endif
 
 #if (GATOR_PERF_SUPPORT) && (!(GATOR_PERF_PMU_SUPPORT))
