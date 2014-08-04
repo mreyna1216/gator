@@ -42,6 +42,10 @@
 #define AARCH64     0xd0f
 #define OTHER       0xfff
 
+// gpu enums
+#define MALI_4xx     1
+#define MALI_T6xx    2
+
 #define MAXSIZE_CORE_NAME 32
 
 struct gator_cpu {
@@ -122,6 +126,8 @@ int gator_events_get_key(void);
 u32 gator_cpuid(void);
 
 void gator_backtrace_handler(struct pt_regs *const regs);
+
+void gator_marshal_activity_switch(int core, int key, int activity, int pid);
 
 #if !GATOR_IKS_SUPPORT
 
