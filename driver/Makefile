@@ -54,7 +54,7 @@ GATOR_TEST ?= 0
 EXTRA_CFLAGS +=	-DGATOR_TEST=$(GATOR_TEST)
 
 # Should the original or new block_rq_complete API be used?
-OLD_BLOCK_RQ_COMPLETE := $(shell grep -A3 block_rq_complete include/trace/events/block.h | grep nr_bytes > /dev/null; echo $$?)
+OLD_BLOCK_RQ_COMPLETE := $(shell grep -A3 block_rq_complete $(srctree)/include/trace/events/block.h | grep nr_bytes -q; echo $$?)
 EXTRA_CFLAGS += -DOLD_BLOCK_RQ_COMPLETE=$(OLD_BLOCK_RQ_COMPLETE)
 
 gator-$(CONFIG_ARM) +=	gator_events_armv6.o \
