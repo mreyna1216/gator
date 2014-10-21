@@ -91,7 +91,7 @@
 
 #endif
 
-STANDARD_PARAM_DEF(u64, u64, "%llu", u64, strict_strtoull);
+STANDARD_PARAM_DEF(u64, u64, "%llu", u64, kstrtoull);
 
 // From include/linux/moduleparam.h
 #define param_check_u64(name, p) __param_check(name, p, u64)
